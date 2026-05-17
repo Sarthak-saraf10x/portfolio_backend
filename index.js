@@ -211,6 +211,7 @@ app.use(
       'http://localhost:3000',
       'http://localhost:4000',
       'https://portfolio-backend-nx7e.onrender.com',
+      'https://portfoliofrontend24.vercel.app'
     ],
     methods: ['GET', 'POST'],
   })
