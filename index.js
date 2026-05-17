@@ -173,7 +173,6 @@ IMPORTANT RULES:
 
 // ── Helper: persist messages to MongoDB ───────────────────────────────────────
 async function persistMessages(sessionId, newMessages) {
-  if (mongoose.connection.readyState !== 1) return;
   try {
     await Conversation.findOneAndUpdate(
       { sessionId },
@@ -190,7 +189,6 @@ async function persistMessages(sessionId, newMessages) {
 
 // ── Helper: load history from MongoDB for a session ───────────────────────────
 async function loadSessionHistory(sessionId) {
-  if (mongoose.connection.readyState !== 1) return [];
   try {
     const conv = await Conversation.findOne({ sessionId }).lean();
     return conv ? conv.messages : [];
