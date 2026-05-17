@@ -297,9 +297,6 @@ app.post('/api/admin/login', (req, res) => {
 
 // GET /api/admin/conversations — list all sessions
 app.get('/api/admin/conversations', verifyAdminToken, async (req, res) => {
-  if (mongoose.connection.readyState !== 1) {
-    return res.json({ error: 'MongoDB not connected', conversations: [] });
-  }
   try {
     const convs = await Conversation.find(
       {},
@@ -327,9 +324,6 @@ app.get('/api/admin/conversations', verifyAdminToken, async (req, res) => {
 
 // GET /api/admin/stats
 app.get('/api/admin/stats', verifyAdminToken, async (req, res) => {
-  if (mongoose.connection.readyState !== 1) {
-    return res.json({ totalConversations: 0, totalMessages: 0 });
-  }
   try {
     const convs = await Conversation.find({}, { messages: 1 }).lean();
     const totalConversations = convs.length;
@@ -346,9 +340,6 @@ app.get('/api/admin/stats', verifyAdminToken, async (req, res) => {
 
 // Legacy public conversations endpoint (keep for backward compat, no auth needed)
 app.get('/api/conversations', async (req, res) => {
-  if (mongoose.connection.readyState !== 1) {
-    return res.json({ error: 'MongoDB not connected', conversations: [] });
-  }
   try {
     const convs = await Conversation.find(
       {},
