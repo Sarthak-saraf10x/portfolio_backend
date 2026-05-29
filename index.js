@@ -7,9 +7,12 @@ const mongoose = require('mongoose');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { retrieveChunks } = require('./knowledge');
 const Conversation = require('./models/Conversation');
+const nodemailer = require('nodemailer');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 
 // ── MongoDB Connection ─────────────────────────────────────────────────────────
-const MONGO_URI = process.env.MONGO_URI
+const MONGO_URI = process.env.MONGO_URI;
 
 mongoose
   .connect(MONGO_URI)
@@ -24,10 +27,84 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const GEMINI_MODEL = 'gemini-flash-latest';
 
-/**
- * RAG-powered reply using Gemini.
- * Retrieves relevant knowledge chunks and calls Gemini with context.
- */
+// ── Email (Nodemailer) Setup ───────────────────────────────────────────────────
+const emailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
+
+// Track sessions that have already had an email sent (reset on server restart)
+const notifiedSessions = new Set();
+
+async function sendNewConversationEmail(sessionId, firstMessage) {
+  if (!process.env.SMTP_PASS || process.env.SMTP_PASS === 'your_gmail_app_password_here') {
+    console.log('📧 Email skipped — SMTP_PASS not configured yet');
+    return;
+  }
+  if (notifiedSessions.has(sessionId)) return; // already notified for this session
+  notifiedSessions.add(sessionId);
+
+  const dashboardUrl = 'https://portfolio-backend-nx7e.onrender.com'; // update if needed
+  const previewText = firstMessage.length > 150 ? firstMessage.slice(0, 150) + '…' : firstMessage;
+
+  try {
+    await emailTransporter.sendMail({
+      from: `"Nocturnal Trail 🏕️" <${process.env.SMTP_USER}>`,
+      to: process.env.NOTIFY_EMAIL,
+      subject: `💬 New visitor on your portfolio!`,
+      html: `
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; background:#0d0d0d; color:#f3dfd1; padding:32px; border-radius:12px; max-width:560px; margin:0 auto;">
+          <div style="text-align:center; margin-bottom:24px;">
+            <span style="font-size:40px;">🏕️</span>
+            <h2 style="color:#ffb77d; margin:8px 0; font-size:22px; letter-spacing:1px;">NEW TRAIL VISITOR</h2>
+            <p style="color:rgba(243,223,209,0.5); font-size:13px; margin:0;">Someone just started chatting on your portfolio</p>
+          </div>
+          <div style="background:rgba(255,140,0,0.08); border:1px solid rgba(255,183,125,0.2); border-radius:10px; padding:20px; margin-bottom:20px;">
+            <p style="margin:0 0 8px 0; color:rgba(243,223,209,0.5); font-size:11px; text-transform:uppercase; letter-spacing:1px;">First Message</p>
+            <p style="margin:0; font-size:15px; color:#f3dfd1; line-height:1.6;">"${previewText}"</p>
+          </div>
+          <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:16px; margin-bottom:24px;">
+            <p style="margin:0 0 6px 0; color:rgba(243,223,209,0.4); font-size:11px;">Session ID</p>
+            <code style="color:#ffb77d; font-size:12px;">${sessionId}</code>
+          </div>
+          <div style="text-align:center;">
+            <p style="color:rgba(243,223,209,0.4); font-size:12px; margin:0;">View all chats in your admin dashboard</p>
+          </div>
+        </div>
+      `,
+    });
+    console.log(`📧 Email sent for new session: ${sessionId.slice(0, 8)}`);
+  } catch (err) {
+    console.error('📧 Email send failed:', err.message);
+  }
+}
+
+// ── Admin Auth ─────────────────────────────────────────────────────────────────
+const ADMIN_USERNAME = 'sarthak';
+const ADMIN_PASSWORD_HASH = bcrypt.hashSync(
+  process.env.ADMIN_PASSWORD || 'sarthak2024admin',
+  10
+);
+const JWT_SECRET = process.env.JWT_SECRET || 'nocturnal_trail_jwt_secret_fallback';
+
+function verifyAdminToken(req, res, next) {
+  const auth = req.headers.authorization;
+  if (!auth || !auth.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const decoded = jwt.verify(auth.slice(7), JWT_SECRET);
+    req.admin = decoded;
+    next();
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+
+// ── RAG-powered reply using Gemini ────────────────────────────────────────────
 async function generateRAGReply(userText, chatHistory = []) {
   const context = retrieveChunks(userText, 3);
 
@@ -57,7 +134,6 @@ IMPORTANT RULES:
         systemInstruction: systemPrompt,
       });
 
-      // Build valid strictly-alternating history for Gemini
       const rawHistory = chatHistory
         .filter((m) => m.text && m.text.trim())
         .map((m) => ({
@@ -73,7 +149,6 @@ IMPORTANT RULES:
           expectedRole = expectedRole === 'user' ? 'model' : 'user';
         }
       }
-      // Must end on 'model' — drop trailing user msg if present
       if (validHistory.length > 0 && validHistory[validHistory.length - 1].role === 'user') {
         validHistory.pop();
       }
@@ -98,7 +173,6 @@ IMPORTANT RULES:
 
 // ── Helper: persist messages to MongoDB ───────────────────────────────────────
 async function persistMessages(sessionId, newMessages) {
-  if (mongoose.connection.readyState !== 1) return; // skip if not connected
   try {
     await Conversation.findOneAndUpdate(
       { sessionId },
@@ -115,7 +189,6 @@ async function persistMessages(sessionId, newMessages) {
 
 // ── Helper: load history from MongoDB for a session ───────────────────────────
 async function loadSessionHistory(sessionId) {
-  if (mongoose.connection.readyState !== 1) return [];
   try {
     const conv = await Conversation.findOne({ sessionId }).lean();
     return conv ? conv.messages : [];
@@ -131,7 +204,13 @@ const server = http.createServer(app);
 
 app.use(
   cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000', 'http://localhost:4000'],
+    origin: [
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'http://localhost:4000',
+      'https://portfolio-backend-nx7e.onrender.com',
+      'https://portfoliofrontend24.vercel.app'
+    ],
     methods: ['GET', 'POST'],
   })
 );
@@ -147,16 +226,14 @@ function welcomeMessage() {
   };
 }
 
-// ── REST API ───────────────────────────────────────────────────────────────────
+// ── REST API — Public ──────────────────────────────────────────────────────────
 
-// GET /api/messages?sessionId=xxx — load conversation history for this session
+// GET /api/messages?sessionId=xxx
 app.get('/api/messages', async (req, res) => {
   const { sessionId } = req.query;
   if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
 
   const history = await loadSessionHistory(sessionId);
-
-  // If no history yet, return just the welcome message
   if (history.length === 0) {
     return res.json([welcomeMessage()]);
   }
@@ -170,7 +247,6 @@ app.post('/api/messages', async (req, res) => {
   if (!text || !text.trim()) return res.status(400).json({ error: 'Message text is required' });
   if (!sessionId) return res.status(400).json({ error: 'sessionId is required' });
 
-  // Build user message
   const userMsg = {
     role: 'user',
     name,
@@ -178,11 +254,10 @@ app.post('/api/messages', async (req, res) => {
     timestamp: new Date().toISOString(),
   };
 
-  // Load recent session history from DB for Gemini context
   const sessionHistory = await loadSessionHistory(sessionId);
+  const isNewSession = sessionHistory.length === 0;
   const recentHistory = sessionHistory.slice(-10);
 
-  // Call Gemini RAG
   const botText = await generateRAGReply(text.trim(), recentHistory);
 
   const botMsg = {
@@ -192,20 +267,77 @@ app.post('/api/messages', async (req, res) => {
     timestamp: new Date().toISOString(),
   };
 
-  // Persist both messages to MongoDB
   await persistMessages(sessionId, [userMsg, botMsg]);
-
-  // Broadcast to WebSocket clients in the same session
   broadcast({ type: 'new_messages', messages: [userMsg, botMsg], sessionId });
+
+  // Fire email for new session (don't await — non-blocking)
+  if (isNewSession) {
+    sendNewConversationEmail(sessionId, text.trim()).catch(() => { });
+  }
 
   res.json({ userMessage: userMsg, botMessage: botMsg });
 });
 
-// GET /api/conversations — list all sessions (admin overview)
-app.get('/api/conversations', async (req, res) => {
-  if (mongoose.connection.readyState !== 1) {
-    return res.json({ error: 'MongoDB not connected', conversations: [] });
+// ── REST API — Admin (Protected) ───────────────────────────────────────────────
+
+// POST /api/admin/login
+app.post('/api/admin/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'username and password required' });
   }
+  if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  const token = jwt.sign({ username, role: 'admin' }, JWT_SECRET, { expiresIn: '24h' });
+  res.json({ token, username });
+});
+
+// GET /api/admin/conversations — list all sessions
+app.get('/api/admin/conversations', verifyAdminToken, async (req, res) => {
+  try {
+    const convs = await Conversation.find(
+      {},
+      { sessionId: 1, lastActiveAt: 1, createdAt: 1, messages: 1 }
+    )
+      .sort({ lastActiveAt: -1 })
+      .limit(100)
+      .lean();
+
+    // Shape response: include message count + preview of last message
+    const shaped = convs.map((c) => ({
+      sessionId: c.sessionId,
+      createdAt: c.createdAt,
+      lastActiveAt: c.lastActiveAt,
+      messageCount: c.messages?.length ?? 0,
+      preview: c.messages?.filter((m) => m.role === 'user').slice(-1)[0]?.text ?? '',
+      messages: c.messages ?? [],
+    }));
+
+    res.json(shaped);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/stats
+app.get('/api/admin/stats', verifyAdminToken, async (req, res) => {
+  try {
+    const convs = await Conversation.find({}, { messages: 1 }).lean();
+    const totalConversations = convs.length;
+    const totalMessages = convs.reduce((sum, c) => sum + (c.messages?.length ?? 0), 0);
+    const userMessages = convs.reduce(
+      (sum, c) => sum + (c.messages?.filter((m) => m.role === 'user').length ?? 0),
+      0
+    );
+    res.json({ totalConversations, totalMessages, userMessages });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Legacy public conversations endpoint (keep for backward compat, no auth needed)
+app.get('/api/conversations', async (req, res) => {
   try {
     const convs = await Conversation.find(
       {},
@@ -222,33 +354,51 @@ app.get('/api/conversations', async (req, res) => {
 
 // ── WebSocket ──────────────────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server });
-
-// Suppress WSS re-emitting server errors (e.g. EADDRINUSE) as unhandled exceptions
-// The server.on('error') handler below takes care of it
 wss.on('error', () => { });
 
-// Map: ws → sessionId for targeted broadcasting
-const clientSessions = new Map();
+const clientSessions = new Map(); // ws → sessionId (visitor clients)
+const adminClients = new Set();   // ws (admin dashboard clients)
+
+// Push an update event to all connected admin dashboards
+function broadcastToAdmins(payload) {
+  const data = JSON.stringify(payload);
+  for (const client of adminClients) {
+    if (client.readyState === 1) client.send(data);
+  }
+}
 
 wss.on('connection', (ws) => {
   ws.on('message', async (data) => {
     try {
       const parsed = JSON.parse(data);
 
-      // Initial handshake — client sends sessionId to register
+      // ── Admin dashboard handshake ──────────────────────────────────────────
+      if (parsed.type === 'admin_init') {
+        try {
+          jwt.verify(parsed.token, JWT_SECRET);
+          adminClients.add(ws);
+          ws.send(JSON.stringify({ type: 'admin_connected' }));
+          console.log('🖥️  Admin dashboard connected via WS');
+        } catch {
+          ws.send(JSON.stringify({ type: 'error', message: 'Invalid admin token' }));
+          ws.close();
+        }
+        return;
+      }
+
+      // ── Visitor init ───────────────────────────────────────────────────────
       if (parsed.type === 'init') {
         const { sessionId } = parsed;
         if (!sessionId) return;
         clientSessions.set(ws, sessionId);
 
-        // Send history for this session
         const history = await loadSessionHistory(sessionId);
         const messages = history.length > 0 ? history : [welcomeMessage()];
         ws.send(JSON.stringify({ type: 'history', messages, sessionId }));
         return;
       }
 
-      // Handle incoming chat message
+      // ── Visitor message ────────────────────────────────────────────────────
       if (parsed.type === 'message') {
         const { text, name = 'Traveler', sessionId } = parsed;
         if (!text || !sessionId) return;
@@ -260,13 +410,10 @@ wss.on('connection', (ws) => {
           timestamp: new Date().toISOString(),
         };
 
-        // NOTE: we do NOT echo userMsg back to sender — client shows it optimistically
-
-        // Load recent history for Gemini context
         const sessionHistory = await loadSessionHistory(sessionId);
+        const isNewSession = sessionHistory.length === 0;
         const recentHistory = sessionHistory.slice(-10);
 
-        // Call Gemini RAG
         const botText = await generateRAGReply(text.trim(), recentHistory);
 
         const botMsg = {
@@ -276,30 +423,70 @@ wss.on('connection', (ws) => {
           timestamp: new Date().toISOString(),
         };
 
-        // Persist to MongoDB
         await persistMessages(sessionId, [userMsg, botMsg]);
-
-        // Send bot reply to all clients with the same sessionId
         broadcast({ type: 'new_messages', messages: [botMsg], sessionId });
+
+        // Notify admin dashboard clients in real-time
+        broadcastToAdmins({
+          type: 'admin_new_message',
+          sessionId,
+          isNewSession,
+          preview: text.trim(),
+          timestamp: userMsg.timestamp,
+        });
+
+        // Email for brand-new session
+        if (isNewSession) {
+          sendNewConversationEmail(sessionId, text.trim()).catch(() => { });
+        }
       }
     } catch (e) {
       console.error('WS error:', e.message);
     }
   });
 
-  ws.on('close', () => clientSessions.delete(ws));
-  ws.on('error', () => clientSessions.delete(ws));
+  ws.on('close', () => {
+    clientSessions.delete(ws);
+    adminClients.delete(ws);
+  });
+  ws.on('error', () => {
+    clientSessions.delete(ws);
+    adminClients.delete(ws);
+  });
 });
 
 function broadcast(payload) {
   const data = JSON.stringify(payload);
   for (const [client, sid] of clientSessions.entries()) {
-    // Only send to clients in the same session (or all if no sessionId filter)
     if (!payload.sessionId || sid === payload.sessionId) {
       if (client.readyState === 1) client.send(data);
     }
   }
 }
+
+// ── Admin: Test Email ─────────────────────────────────────────────────────────
+app.post('/api/admin/test-email', verifyAdminToken, async (req, res) => {
+  if (!process.env.SMTP_PASS || process.env.SMTP_PASS === 'your_gmail_app_password_here') {
+    return res.status(400).json({
+      error: 'SMTP_PASS is not configured in .env — see setup instructions',
+    });
+  }
+  try {
+    await emailTransporter.verify();
+    await emailTransporter.sendMail({
+      from: `"Nocturnal Trail 🏕️" <${process.env.SMTP_USER}>`,
+      to: process.env.NOTIFY_EMAIL,
+      subject: '✅ Portfolio email test — it works!',
+      html: `<div style="font-family:sans-serif;padding:24px;background:#0d0d0d;color:#f3dfd1;border-radius:12px">
+        <h2 style="color:#ffb77d">🏕️ Test email successful!</h2>
+        <p>Your Nocturnal Trail email notifications are correctly configured.<br>You will receive alerts at <strong>${process.env.NOTIFY_EMAIL}</strong> whenever a new visitor starts a chat.</p>
+      </div>`,
+    });
+    res.json({ success: true, message: `Test email sent to ${process.env.NOTIFY_EMAIL}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── Health check ───────────────────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
@@ -319,11 +506,10 @@ app.get('/health', async (req, res) => {
 // ── Start ──────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 
-// Handle port-in-use gracefully instead of crashing
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`❌ Port ${PORT} is already in use. Kill the process and retry.`);
-    process.exit(1); // Exit cleanly so nodemon can restart
+    process.exit(1);
   } else {
     throw err;
   }
@@ -334,9 +520,12 @@ server.listen(PORT, () => {
   console.log(`🔌 WebSocket ready on ws://localhost:${PORT}`);
   console.log(`🤖 Gemini model: ${GEMINI_MODEL}`);
   console.log(`📚 RAG knowledge base: ${require('./knowledge').KNOWLEDGE_CHUNKS.length} chunks loaded`);
+  console.log(`🔐 Admin login: POST /api/admin/login (user: sarthak)`);
+  console.log(`📧 Email notifications: ${process.env.NOTIFY_EMAIL}`);
+  console.log(`version: 1.0.0`);
 });
 
-// ── Graceful shutdown (nodemon sends SIGUSR2, systemd sends SIGTERM) ─────────
+// ── Graceful shutdown ─────────────────────────────────────────────────────────
 function shutdown(signal) {
   console.log(`\n🛑 ${signal} received — shutting down gracefully...`);
   server.close(() => {
@@ -345,10 +534,9 @@ function shutdown(signal) {
       process.exit(0);
     });
   });
-  // Force exit if shutdown takes > 5s
   setTimeout(() => process.exit(1), 5000).unref();
 }
 
 process.once('SIGTERM', () => shutdown('SIGTERM'));
 process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGUSR2', () => shutdown('SIGUSR2')); // nodemon restart signal
+process.once('SIGUSR2', () => shutdown('SIGUSR2'));
