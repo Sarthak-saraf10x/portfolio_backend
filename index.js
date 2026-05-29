@@ -490,6 +490,22 @@ app.post('/api/admin/test-email', verifyAdminToken, async (req, res) => {
   }
 });
 
+// ── TEMPORARY PUBLIC TEST ROUTE FOR DEBUGGING ─────────────────────────────────
+app.get('/api/test-email-public', async (req, res) => {
+  try {
+    await emailTransporter.verify();
+    await emailTransporter.sendMail({
+      from: `"Nocturnal Trail 🏕️" <${process.env.SMTP_USER}>`,
+      to: process.env.NOTIFY_EMAIL,
+      subject: '✅ Render SMTP Debug Test',
+      html: `<p>If you get this, SMTP is working perfectly on Render!</p>`,
+    });
+    res.json({ success: true, message: "Email sent successfully! Check your inbox." });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, stack: err.stack });
+  }
+});
+
 // ── Health check ───────────────────────────────────────────────────────────────
 app.get('/health', async (req, res) => {
   const dbState = ['disconnected', 'connected', 'connecting', 'disconnecting'];
@@ -524,7 +540,7 @@ server.listen(PORT, () => {
   console.log(`📚 RAG knowledge base: ${require('./knowledge').KNOWLEDGE_CHUNKS.length} chunks loaded`);
   console.log(`🔐 Admin login: POST /api/admin/login (user: sarthak)`);
   console.log(`📧 Email notifications: ${process.env.NOTIFY_EMAIL}`);
-  console.log(`version: 1.2.0`);
+  console.log(`version: 1.2.1`);
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
