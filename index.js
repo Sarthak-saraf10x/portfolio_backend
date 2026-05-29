@@ -29,7 +29,9 @@ const GEMINI_MODEL = 'gemini-flash-latest';
 
 // ── Email (Nodemailer) Setup ───────────────────────────────────────────────────
 const emailTransporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
@@ -522,7 +524,7 @@ server.listen(PORT, () => {
   console.log(`📚 RAG knowledge base: ${require('./knowledge').KNOWLEDGE_CHUNKS.length} chunks loaded`);
   console.log(`🔐 Admin login: POST /api/admin/login (user: sarthak)`);
   console.log(`📧 Email notifications: ${process.env.NOTIFY_EMAIL}`);
-  console.log(`version: 1.0.0`);
+  console.log(`version: 1.2.0`);
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
