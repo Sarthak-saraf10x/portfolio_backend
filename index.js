@@ -1,18 +1,12 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
-const dns = require('dns');
-
-// Force IPv4 to prevent ENETUNREACH (IPv6) errors on Render/Docker
-dns.setDefaultResultOrder('ipv4first');
-
 const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { retrieveChunks } = require('./knowledge');
 const Conversation = require('./models/Conversation');
-const nodemailer = require('nodemailer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 
@@ -32,60 +26,47 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const GEMINI_MODEL = 'gemini-flash-latest';
 
-// ── Email (Nodemailer) Setup ───────────────────────────────────────────────────
-const emailTransporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+// ── Telegram Notification Setup ────────────────────────────────────────────────
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Track sessions that have already had an email sent (reset on server restart)
+// Track sessions that have already had a notification sent (reset on server restart)
 const notifiedSessions = new Set();
 
-async function sendNewConversationEmail(sessionId, firstMessage) {
-  if (!process.env.SMTP_PASS || process.env.SMTP_PASS === 'your_gmail_app_password_here') {
-    console.log('📧 Email skipped — SMTP_PASS not configured yet');
+async function sendTelegramNotification(sessionId, firstMessage) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
+    console.log('📱 Telegram skipped — Token or Chat ID not configured');
     return;
   }
   if (notifiedSessions.has(sessionId)) return; // already notified for this session
   notifiedSessions.add(sessionId);
 
-  const dashboardUrl = 'https://portfolio-backend-nx7e.onrender.com'; // update if needed
-  const previewText = firstMessage.length > 150 ? firstMessage.slice(0, 150) + '…' : firstMessage;
+  const previewText = firstMessage.length > 200 ? firstMessage.slice(0, 200) + '…' : firstMessage;
+  
+  const text = `🏕️ *NEW TRAIL VISITOR* 🏕️\n\n` +
+               `*Session ID:* \`${sessionId}\`\n\n` +
+               `*First Message:*\n"${previewText}"\n\n` +
+               `_Someone just started chatting on your portfolio._`;
 
   try {
-    await emailTransporter.sendMail({
-      from: `"Nocturnal Trail 🏕️" <${process.env.SMTP_USER}>`,
-      to: process.env.NOTIFY_EMAIL,
-      subject: `💬 New visitor on your portfolio!`,
-      html: `
-        <div style="font-family: 'Segoe UI', Arial, sans-serif; background:#0d0d0d; color:#f3dfd1; padding:32px; border-radius:12px; max-width:560px; margin:0 auto;">
-          <div style="text-align:center; margin-bottom:24px;">
-            <span style="font-size:40px;">🏕️</span>
-            <h2 style="color:#ffb77d; margin:8px 0; font-size:22px; letter-spacing:1px;">NEW TRAIL VISITOR</h2>
-            <p style="color:rgba(243,223,209,0.5); font-size:13px; margin:0;">Someone just started chatting on your portfolio</p>
-          </div>
-          <div style="background:rgba(255,140,0,0.08); border:1px solid rgba(255,183,125,0.2); border-radius:10px; padding:20px; margin-bottom:20px;">
-            <p style="margin:0 0 8px 0; color:rgba(243,223,209,0.5); font-size:11px; text-transform:uppercase; letter-spacing:1px;">First Message</p>
-            <p style="margin:0; font-size:15px; color:#f3dfd1; line-height:1.6;">"${previewText}"</p>
-          </div>
-          <div style="background:rgba(255,255,255,0.03); border-radius:8px; padding:16px; margin-bottom:24px;">
-            <p style="margin:0 0 6px 0; color:rgba(243,223,209,0.4); font-size:11px;">Session ID</p>
-            <code style="color:#ffb77d; font-size:12px;">${sessionId}</code>
-          </div>
-          <div style="text-align:center;">
-            <p style="color:rgba(243,223,209,0.4); font-size:12px; margin:0;">View all chats in your admin dashboard</p>
-          </div>
-        </div>
-      `,
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: TELEGRAM_CHAT_ID,
+        text: text,
+        parse_mode: 'Markdown'
+      }),
     });
-    console.log(`📧 Email sent for new session: ${sessionId.slice(0, 8)}`);
+    const data = await response.json();
+    
+    if (data.ok) {
+      console.log(`📱 Telegram notification sent for new session: ${sessionId.slice(0, 8)}`);
+    } else {
+      console.error('📱 Telegram send failed:', data.description);
+    }
   } catch (err) {
-    console.error('📧 Email send failed:', err.message);
+    console.error('📱 Telegram network error:', err.message);
   }
 }
 
@@ -277,9 +258,9 @@ app.post('/api/messages', async (req, res) => {
   await persistMessages(sessionId, [userMsg, botMsg]);
   broadcast({ type: 'new_messages', messages: [userMsg, botMsg], sessionId });
 
-  // Fire email for new session (don't await — non-blocking)
+  // Fire telegram notification for new session (don't await — non-blocking)
   if (isNewSession) {
-    sendNewConversationEmail(sessionId, text.trim()).catch(() => { });
+    sendTelegramNotification(sessionId, text.trim()).catch(() => { });
   }
 
   res.json({ userMessage: userMsg, botMessage: botMsg });
@@ -442,9 +423,9 @@ wss.on('connection', (ws) => {
           timestamp: userMsg.timestamp,
         });
 
-        // Email for brand-new session
+        // Telegram for brand-new session
         if (isNewSession) {
-          sendNewConversationEmail(sessionId, text.trim()).catch(() => { });
+          sendTelegramNotification(sessionId, text.trim()).catch(() => { });
         }
       }
     } catch (e) {
@@ -471,43 +452,32 @@ function broadcast(payload) {
   }
 }
 
-// ── Admin: Test Email ─────────────────────────────────────────────────────────
+// ── Admin: Test Telegram ─────────────────────────────────────────────────────────
 app.post('/api/admin/test-email', verifyAdminToken, async (req, res) => {
-  if (!process.env.SMTP_PASS || process.env.SMTP_PASS === 'your_gmail_app_password_here') {
+  if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.TELEGRAM_CHAT_ID) {
     return res.status(400).json({
-      error: 'SMTP_PASS is not configured in .env — see setup instructions',
+      error: 'TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is not configured in .env',
     });
   }
   try {
-    await emailTransporter.verify();
-    await emailTransporter.sendMail({
-      from: `"Nocturnal Trail 🏕️" <${process.env.SMTP_USER}>`,
-      to: process.env.NOTIFY_EMAIL,
-      subject: '✅ Portfolio email test — it works!',
-      html: `<div style="font-family:sans-serif;padding:24px;background:#0d0d0d;color:#f3dfd1;border-radius:12px">
-        <h2 style="color:#ffb77d">🏕️ Test email successful!</h2>
-        <p>Your Nocturnal Trail email notifications are correctly configured.<br>You will receive alerts at <strong>${process.env.NOTIFY_EMAIL}</strong> whenever a new visitor starts a chat.</p>
-      </div>`,
+    const response = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: process.env.TELEGRAM_CHAT_ID,
+        text: `✅ *Portfolio Test Successful!*\n\nYour Nocturnal Trail Telegram notifications are correctly configured.`,
+        parse_mode: 'Markdown'
+      }),
     });
-    res.json({ success: true, message: `Test email sent to ${process.env.NOTIFY_EMAIL}` });
+    const data = await response.json();
+    
+    if (data.ok) {
+      res.json({ success: true, message: `Test Telegram message sent!` });
+    } else {
+      res.status(500).json({ error: data.description });
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
-  }
-});
-
-// ── TEMPORARY PUBLIC TEST ROUTE FOR DEBUGGING ─────────────────────────────────
-app.get('/api/test-email-public', async (req, res) => {
-  try {
-    await emailTransporter.verify();
-    await emailTransporter.sendMail({
-      from: `"Nocturnal Trail 🏕️" <${process.env.SMTP_USER}>`,
-      to: process.env.NOTIFY_EMAIL,
-      subject: '✅ Render SMTP Debug Test',
-      html: `<p>If you get this, SMTP is working perfectly on Render!</p>`,
-    });
-    res.json({ success: true, message: "Email sent successfully! Check your inbox." });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message, stack: err.stack });
   }
 });
 
@@ -544,8 +514,8 @@ server.listen(PORT, () => {
   console.log(`🤖 Gemini model: ${GEMINI_MODEL}`);
   console.log(`📚 RAG knowledge base: ${require('./knowledge').KNOWLEDGE_CHUNKS.length} chunks loaded`);
   console.log(`🔐 Admin login: POST /api/admin/login (user: sarthak)`);
-  console.log(`📧 Email notifications: ${process.env.NOTIFY_EMAIL}`);
-  console.log(`version: 1.2.2`);
+  console.log(`📱 Telegram notifications: Enabled for chat ${process.env.TELEGRAM_CHAT_ID}`);
+  console.log(`version: 1.3.0`);
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
