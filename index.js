@@ -1,6 +1,11 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const dns = require('dns');
+
+// Force IPv4 to prevent ENETUNREACH (IPv6) errors on Render/Docker
+dns.setDefaultResultOrder('ipv4first');
+
 const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -540,7 +545,7 @@ server.listen(PORT, () => {
   console.log(`📚 RAG knowledge base: ${require('./knowledge').KNOWLEDGE_CHUNKS.length} chunks loaded`);
   console.log(`🔐 Admin login: POST /api/admin/login (user: sarthak)`);
   console.log(`📧 Email notifications: ${process.env.NOTIFY_EMAIL}`);
-  console.log(`version: 1.2.1`);
+  console.log(`version: 1.2.2`);
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
