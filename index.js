@@ -272,7 +272,7 @@ app.post('/api/messages', async (req, res) => {
 
   // Fire email for new session (don't await — non-blocking)
   if (isNewSession) {
-    sendNewConversationEmail(sessionId, text.trim()).catch(() => {});
+    sendNewConversationEmail(sessionId, text.trim()).catch(() => { });
   }
 
   res.json({ userMessage: userMsg, botMessage: botMsg });
@@ -437,7 +437,7 @@ wss.on('connection', (ws) => {
 
         // Email for brand-new session
         if (isNewSession) {
-          sendNewConversationEmail(sessionId, text.trim()).catch(() => {});
+          sendNewConversationEmail(sessionId, text.trim()).catch(() => { });
         }
       }
     } catch (e) {
@@ -522,6 +522,7 @@ server.listen(PORT, () => {
   console.log(`📚 RAG knowledge base: ${require('./knowledge').KNOWLEDGE_CHUNKS.length} chunks loaded`);
   console.log(`🔐 Admin login: POST /api/admin/login (user: sarthak)`);
   console.log(`📧 Email notifications: ${process.env.NOTIFY_EMAIL}`);
+  console.log(`version: 1.0.0`);
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
