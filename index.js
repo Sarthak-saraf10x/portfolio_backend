@@ -1,6 +1,11 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const dns = require('dns');
+
+// Force IPv4 to prevent ENETUNREACH (IPv6) errors on Render/Docker
+dns.setDefaultResultOrder('ipv4first');
+
 const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const mongoose = require('mongoose');
