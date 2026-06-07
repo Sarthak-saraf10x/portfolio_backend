@@ -9,6 +9,8 @@ const { retrieveChunks } = require('./knowledge');
 const Conversation = require('./models/Conversation');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const { OAuth2Client } = require('google-auth-library');
+const User = require('./models/User');
 
 // ── MongoDB Connection ─────────────────────────────────────────────────────────
 const MONGO_URI = process.env.MONGO_URI;
@@ -49,13 +51,22 @@ async function sendTelegramNotification(sessionId, firstMessage) {
                `_Someone just started chatting on your portfolio._`;
 
   try {
+    const dashboardUrl = `https://portfoliofrontend24.vercel.app/admin/dashboard?session=${sessionId}`;
     const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: TELEGRAM_CHAT_ID,
         text: text,
-        parse_mode: 'Markdown'
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            {
+              text: "🖥️ Open Admin Dashboard",
+              url: dashboardUrl
+            }
+          ]]
+        }
       }),
     });
     const data = await response.json();
@@ -71,12 +82,9 @@ async function sendTelegramNotification(sessionId, firstMessage) {
 }
 
 // ── Admin Auth ─────────────────────────────────────────────────────────────────
-const ADMIN_USERNAME = 'sarthak';
-const ADMIN_PASSWORD_HASH = bcrypt.hashSync(
-  process.env.ADMIN_PASSWORD || 'sarthak2024admin',
-  10
-);
 const JWT_SECRET = process.env.JWT_SECRET || 'nocturnal_trail_jwt_secret_fallback';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const client = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 function verifyAdminToken(req, res, next) {
   const auth = req.headers.authorization;
@@ -85,6 +93,9 @@ function verifyAdminToken(req, res, next) {
   }
   try {
     const decoded = jwt.verify(auth.slice(7), JWT_SECRET);
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden: Admins only' });
+    }
     req.admin = decoded;
     next();
   } catch {
@@ -268,17 +279,47 @@ app.post('/api/messages', async (req, res) => {
 
 // ── REST API — Admin (Protected) ───────────────────────────────────────────────
 
-// POST /api/admin/login
-app.post('/api/admin/login', (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'username and password required' });
+// POST /api/auth/google
+app.post('/api/auth/google', async (req, res) => {
+  const { credential } = req.body;
+  if (!credential) {
+    return res.status(400).json({ error: 'Google credential required' });
   }
-  if (username !== ADMIN_USERNAME || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
-    return res.status(401).json({ error: 'Invalid credentials' });
+
+  try {
+    // If GOOGLE_CLIENT_ID is not set in env, we allow it to pass temporarily, or we could require it.
+    // It is best practice to have the audience set to your client id.
+    const ticket = await client.verifyIdToken({
+      idToken: credential,
+      audience: GOOGLE_CLIENT_ID,
+    });
+    
+    const payload = ticket.getPayload();
+    const { email, name, picture } = payload;
+
+    // Find or create user
+    let user = await User.findOne({ email });
+    if (!user) {
+      user = new User({ email, name, picture, role: 'user' });
+      await user.save();
+    } else {
+      // Update info
+      user.name = name;
+      user.picture = picture;
+      await user.save();
+    }
+
+    const token = jwt.sign(
+      { userId: user._id, email: user.email, role: user.role, name: user.name },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({ token, user: { email: user.email, name: user.name, role: user.role, picture: user.picture } });
+  } catch (error) {
+    console.error('Google token verification failed:', error.message);
+    res.status(401).json({ error: 'Invalid Google token' });
   }
-  const token = jwt.sign({ username, role: 'admin' }, JWT_SECRET, { expiresIn: '24h' });
-  res.json({ token, username });
 });
 
 // GET /api/admin/conversations — list all sessions
@@ -363,7 +404,8 @@ wss.on('connection', (ws) => {
       // ── Admin dashboard handshake ──────────────────────────────────────────
       if (parsed.type === 'admin_init') {
         try {
-          jwt.verify(parsed.token, JWT_SECRET);
+          const decoded = jwt.verify(parsed.token, JWT_SECRET);
+          if (decoded.role !== 'admin') throw new Error('Forbidden');
           adminClients.add(ws);
           ws.send(JSON.stringify({ type: 'admin_connected' }));
           console.log('🖥️  Admin dashboard connected via WS');
