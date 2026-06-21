@@ -23,13 +23,14 @@ complex real-world problems through code.
 Sarthak's technical skills and stack:
 
 Frontend: React.js, Next.js, Vite, HTML5, CSS3, Tailwind CSS, Framer Motion, React Three Fiber (WebGL/Three.js)
-Backend: Node.js, Express.js, REST APIs, WebSocket (ws library)
+Backend: Node.js, Express.js, FastAPI, REST APIs, WebSocket (ws library, FastAPI WebSockets)
+Embedded/IoT: ESP32-S3 microcontrollers, C++, FreeRTOS dual-core multitasking, ESP-SR (wake word), PSRAM management
 Databases: MongoDB (Mongoose), PostgreSQL
 Auth & Security: JWT (JSON Web Tokens), bcrypt, role-based access control
 Payments: Razorpay payment gateway integration
 Tools: Git, GitHub, Postman, VS Code, npm/yarn
 Design: Figma, Google Stitch (AI UI design), glassmorphism, responsive design
-AI/ML: Gemini API integration, RAG (Retrieval Augmented Generation)
+AI/ML: Gemini API integration, RAG (Retrieval Augmented Generation), Faster-Whisper (STT), Piper (TTS), Model Context Protocol (MCP) agentic tool integration
     `.trim(),
   },
   {
@@ -69,6 +70,26 @@ A comprehensive insurance claims management web application featuring:
 - React.js frontend with role-based UI
 - Node.js + Express backend
 - GeoJSON support for location-based features
+    `.trim(),
+  },
+  {
+    id: 'project_esp',
+    tags: ['esp', 'esp32', 'bot', 'desktop', 'conversational', 'ai', 'agent', 'voice', 'assistant', 'mcp', 'tools', 'capstone', 'mca', 'freertos', 'hardware', 'iot'],
+    content: `
+Project: ESP32-S3 AI Desktop Bot – IoT Conversational AI Agent
+GitHub: https://github.com/Sarthak-saraf10x/esp_Desktop_bot
+
+A hybrid edge-cloud voice assistant and conversational AI agent featuring:
+- Offline wake-word detection ("Hi ESP") via Espressif ESP-SR
+- Full-duplex WebSocket audio streaming at 16 kHz
+- Local VAD (Voice Activity Detection) silence-gate on the microcontroller
+- Achieves a net processing latency of ~1.79 seconds
+- FastAPI backend pipeline: Faster-Whisper (STT) → Google Gemini (LLM) → Piper (TTS)
+- NumPy resampling (22 kHz to 16 kHz) and sentence-level audio streaming to minimize first-audio delay
+- Integrated 6 agentic MCP (Model Context Protocol) tools: web search, weather, clipboard sync, document generation via SMTP, geolocation, and time over a persistent stdio bridge
+- Tool calls executed in under 300 ms
+- Dual-core FreeRTOS partitioning (Core 0: networking/recording; Core 1: OLED + playback) with 1 MB PSRAM ring buffer for jitter-free audio output
+- Served as Sarthak's MCA Final Year Capstone Project at Alard Institute / SPPU
     `.trim(),
   },
   {
